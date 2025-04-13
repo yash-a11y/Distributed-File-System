@@ -15,16 +15,16 @@
 #include <limits.h>
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
-#define PORT 8080
+#define PORT 9080
 #define MAX_BUFF 4096
-#define S2_PORT 8081
-#define S3_PORT 8082
-#define S4_PORT 8083
+#define S2_PORT 9081
+#define S3_PORT 9082
+#define S4_PORT 9083
 
 // Structure to hold file names for sorting
 typedef struct {
     char name[256];
-    char type;  // 'c', 'p', 't', 'z' for .c, .pdf, .txt, .zip
+    char type;  
 } FileEntry;
 
 // Function declarations
@@ -44,7 +44,7 @@ void get_tar_from_server(int server_port, char *filetype, int client_sock);
 void get_filenames_from_server(int server_port, char *pathname, FileEntry *entries, int *count);
 int compare_file_entries(const void *a, const void *b);
 
-// Function to read a line up to a delimiter
+// function to read a line up to a delimiter
 ssize_t read_until(int sock, char *buf, char delim) {
     ssize_t total = 0;
     while (total < MAX_BUFF - 1) {
@@ -57,7 +57,7 @@ ssize_t read_until(int sock, char *buf, char delim) {
     return total;
 }
 
-// Function to create directories recursively
+// function to create directories recursively
 void mkdirp(const char *path) {
     char cmd[256];
     snprintf(cmd, sizeof(cmd), "mkdir -p %s", path);
@@ -69,7 +69,7 @@ void mkdirp(const char *path) {
     }
 }
 
-// Helper function to expand HOME_DIR to actual path
+// felper function to expand HOME_DIR to actual path
 char* expand_path(const char* path) {
     static char expanded[PATH_MAX];
     
@@ -84,7 +84,7 @@ char* expand_path(const char* path) {
     return (char*)path;
 }
 
-// Function to forward a file to another server (S2, S3, or S4)
+// function to forward a file to another server (S2, S3, or S4)
 void forward_file(char *filename, char *dest_path, int target_port) {
     int server_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (server_sock < 0) {
@@ -92,6 +92,24 @@ void forward_file(char *filename, char *dest_path, int target_port) {
         return;
     }
     
+    // set socket timeout (e.g., 30 seconds)
+    struct timeval timeout;
+    timeout.tv_sec = 30;
+    timeout.tv_usec = 0;
+
+    if (setsockopt(server_sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0) {
+        perror("Setting socket timeout failed");
+        close(server_sock);
+        return;
+    }
+    
+    // aadd socket receive buffer size increase
+    int rcvbuf = 65536;  
+    if (setsockopt(server_sock, SOL_SOCKET, SO_RCVBUF, &rcvbuf, sizeof(rcvbuf)) < 0) {
+        perror("Setting receive buffer size failed");
+       
+    }
+
     struct sockaddr_in server_addr;
     
     server_addr.sin_family = AF_INET;
@@ -104,21 +122,21 @@ void forward_file(char *filename, char *dest_path, int target_port) {
         return;
     }
 
-    // Send command to storage server
+    // send command to storage server
     char command[MAX_BUFF];
     snprintf(command, sizeof(command), "uploadf %s %s\n", filename, dest_path);
 
     write(server_sock, command, strlen(command));
     
-    // Send file content
+    // send file content
     char file_path[MAX_BUFF];
-    snprintf(file_path, sizeof(file_path), "/tmp/S1/%s", dest_path);
-    // Create directory if it doesn't exist
+    snprintf(file_path, sizeof(file_path), "~/S1/%s", dest_path);
+    // create directory if it doesn't exist
     mkdirp(file_path);
-    // Now build the full path with filename
-    snprintf(file_path, sizeof(file_path), "/tmp/S1/%s/%s", dest_path, filename);
+    // full path with filename
+    snprintf(file_path, sizeof(file_path), "~/S1/%s/%s", dest_path, filename);
     char *expanded_path = expand_path(file_path);
-    printf("Forward file - full path: %s\n", expanded_path); // Debug output
+    printf("Forward file - full path: %s\n", expanded_path);
 
     struct stat st;
     if (stat(expanded_path, &st) != 0) {
@@ -127,7 +145,7 @@ void forward_file(char *filename, char *dest_path, int target_port) {
         return;
     }
     
-    // Send file size
+    // send file size
     char size_str[32];
     snprintf(size_str, sizeof(size_str), "%ld", st.st_size);
     write(server_sock, size_str, strlen(size_str));
@@ -146,28 +164,51 @@ void forward_file(char *filename, char *dest_path, int target_port) {
     }
     close(fd);
     
-    // Wait for acknowledgment
+    // wait for ACK 
+    // error handling
     memset(buffer, 0, MAX_BUFF);
-    read(server_sock, buffer, 3);
+    printf("S1: Waiting for server response...\n");
     
-    if (strcmp(buffer, "ACK") == 0) {
+    //  multiple times with  timeouts
+    int retry_count = 3;
+    ssize_t read_result = 0;
+    
+    while (retry_count > 0) {
+        read_result = recv(server_sock, buffer, MAX_BUFF - 1, 0);
+        if (read_result > 0) {
+            buffer[read_result] = '\0';
+            break;
+        }
+        retry_count--;
+        if (retry_count > 0) {
+            printf("S1: Retrying read, attempts left: %d\n", retry_count);
+            usleep(500000);  // wait 500ms before retry
+        }
+    }
+    
+    printf("S1: Read result: %zd, Response: '%s'\n", read_result, buffer);
+
+    if (read_result > 0 && strncmp(buffer, "ACK", 3) == 0) {
         printf("File successfully forwarded to server on port %d\n", target_port);
-        printf("Deleting local file: %s\n", expanded_path); // Add this line
-   
-        // Delete local copy of forwarded file
+        printf("Deleting local file: %s\n", expanded_path);
+
+        // delete local copy of forwarded file
         if (unlink(expanded_path) == 0) {
             printf("Deleted local copy of forwarded file: %s\n", expanded_path);
         } else {
             perror("Failed to delete forwarded file");
         }
     } else {
-        printf("Error: Server rejected file\n");
+        if (read_result <= 0) {
+            printf("Error: No response from server (read result: %zd)\n", read_result);
+        } else {
+            printf("Error: Server rejected file with response: '%s'\n", buffer);
+        }
     }
     
     close(server_sock);
 }
-
-// Function to handle uploadf command
+// function to handle uploadf command
 void handle_uploadf_command(int client_sock, char *filename, char *dest_path) {
     // Read file size
     char size_header[32];
@@ -183,25 +224,26 @@ void handle_uploadf_command(int client_sock, char *filename, char *dest_path) {
         return;
     }
     
-    // Make sure dest_path starts with ~S1/
+    // dest_path starts with ~S1/
     if (strncmp(dest_path, "~S1/", 4) != 0) {
         write(client_sock, "ERR: Path must start with ~S1/\n", 29);
         return;
     }
     
-    // Convert path (e.g., ~S1/f1 -> /tmp/S1/f1/xyz.c)
+    // Convert path  ~S1/f1 -> /tmp/S1/f1/xyz.c
     char full_path[MAX_BUFF];
-    snprintf(full_path, sizeof(full_path), "/tmp/S1/%s/%s", 
+    snprintf(full_path, sizeof(full_path), "~/S1/%s/%s", 
              dest_path + 4, filename); // Skip ~S1/
-    
-    // Create directory structure
-    char *dir_path = strdup(full_path);
+    char *expanded_full_path = expand_path(full_path);
+
+    // create directory structure
+    char *dir_path = strdup(expanded_full_path);
     char *dir = dirname(dir_path);
     mkdirp(dir);
     free(dir_path);
     
-    // Save file temporarily
-    int fd = open(full_path, O_WRONLY | O_CREAT, 0666);
+    // save file temporarily
+    int fd = open(expanded_full_path, O_WRONLY | O_CREAT, 0666);
     if (fd < 0) {
         perror("File creation failed");
         write(client_sock, "ERR: File creation failed\n", 26);
@@ -233,11 +275,11 @@ void handle_uploadf_command(int client_sock, char *filename, char *dest_path) {
     
     if (remaining > 0) {
         write(client_sock, "ERR: Incomplete file transfer\n", 30);
-        unlink(full_path);
+        unlink(expanded_full_path);
         return;
     }
     
-    // Forward to appropriate server based on file extension
+    // forward to appropriate server based on file extension
     char *ext = strrchr(filename, '.');
     if (ext) {
         int target_port = 0;
@@ -248,21 +290,29 @@ void handle_uploadf_command(int client_sock, char *filename, char *dest_path) {
         if (target_port) {
             forward_file(filename, dest_path + 4, target_port);
             write(client_sock, "OK: File stored remotely\n", 25);
-            unlink(full_path);
+            // get directory path
+            char *dir_path = strdup(expanded_full_path);
+            char *parent_dir = dirname(dir_path);
+    
+            // remove parent directory if empty
+            rmdir(parent_dir);  // only succeed if directory is empty
+            
+            free(dir_path);
+           
         } else if (strcmp(ext, ".c") == 0) {
             // Keep .c files locally
             write(client_sock, "OK: File stored locally\n", 23);
         } else {
             write(client_sock, "ERR: Unsupported file type\n", 27);
-            unlink(full_path);
+            unlink(expanded_full_path);
         }
     } else {
         write(client_sock, "ERR: File has no extension\n", 27);
-        unlink(full_path);
+        unlink(expanded_full_path);
     }
 }
 
-// Function to get a file from another server (S2, S3, or S4)
+// function to get a file from another server (S2, S3, or S4)
 void get_file_from_server(int server_port, char *filepath, int client_sock) {
     int server_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (server_sock < 0) {
@@ -283,22 +333,22 @@ void get_file_from_server(int server_port, char *filepath, int client_sock) {
         return;
     }
     
-    // Send getf command to the server
+    // send getf command to the server
     char command[MAX_BUFF];
     snprintf(command, sizeof(command), "getf %s", filepath);
     write(server_sock, command, strlen(command));
     
-    // Read file size
+    // read file size
     char size_buf[32];
     read_until(server_sock, size_buf, '\n');
     off_t file_size = atol(size_buf);
     
-    // Forward file size to client
+    // forward file size to client
     char size_header[64];
     snprintf(size_header, sizeof(size_header), "%ld\n", file_size);
     write(client_sock, size_header, strlen(size_header));
     
-    // Forward file data from server to client
+    // forward file data from server to client
     char buffer[MAX_BUFF];
     ssize_t bytes_read;
     off_t total_read = 0;
@@ -312,23 +362,23 @@ void get_file_from_server(int server_port, char *filepath, int client_sock) {
     close(server_sock);
 }
 
-// Function to handle downlf command
+// function to handle downlf command
 void handle_downlf_command(int client_sock, char *filepath) {
-    // Make sure filepath starts with ~S1/
+    // filepath starts with ~S1/
     if (strncmp(filepath, "~S1/", 4) != 0) {
         write(client_sock, "ERR: Path must start with ~S1/\n", 29);
         return;
     }
     
-    // Extract filename from path
+    // extract filename from path
     char *filename = strrchr(filepath, '/');
     if (!filename) {
         write(client_sock, "ERR: Invalid file path\n", 22);
         return;
     }
-    filename++; // Skip the '/'
+    filename++; // Skip  '/'
     
-    // Check file extension
+    // check file extension
     char *ext = strrchr(filename, '.');
     if (!ext) {
         write(client_sock, "ERR: File has no extension\n", 27);
@@ -336,23 +386,24 @@ void handle_downlf_command(int client_sock, char *filepath) {
     }
     
     if (strcmp(ext, ".c") == 0) {
-        // C files are stored locally
+        // c files are stored locally
         char full_path[MAX_BUFF];
-        snprintf(full_path, sizeof(full_path), "/tmp/S1/%s", filepath + 4); // Skip ~S1/
-        
+        snprintf(full_path, sizeof(full_path), "~/S1/%s", filepath + 4); // Skip ~S1/
+        char *expanded_full_path = expand_path(full_path);
+
         struct stat st;
-        if (stat(full_path, &st) != 0) {
+        if (stat(expanded_full_path, &st) != 0) {
             write(client_sock, "ERR: File not found\n", 20);
             return;
         }
         
-        // Send file size
+        // send file size
         char size_header[64];
         snprintf(size_header, sizeof(size_header), "%ld\n", st.st_size);
         write(client_sock, size_header, strlen(size_header));
         
-        // Send file content
-        int fd = open(full_path, O_RDONLY);
+        // send file content
+        int fd = open(expanded_full_path, O_RDONLY);
         if (fd < 0) {
             perror("Cannot open file");
             return;
@@ -378,7 +429,7 @@ void handle_downlf_command(int client_sock, char *filepath) {
     }
 }
 
-// Function to remove a file from another server
+// function to remove a file from another server
 void remove_file_from_server(int server_port, char *filepath) {
     int server_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (server_sock < 0) {
@@ -412,7 +463,7 @@ void remove_file_from_server(int server_port, char *filepath) {
 
 // Function to handle removef command
 void handle_removef_command(int client_sock, char *filepath) {
-    // Make sure filepath starts with ~S1/
+    // filepath starts with ~S1/
     if (strncmp(filepath, "~S1/", 4) != 0) {
         write(client_sock, "ERR: Path must start with ~S1/\n", 29);
         return;
@@ -433,14 +484,15 @@ void handle_removef_command(int client_sock, char *filepath) {
         return;
     }
     
-    // Continuation of handle_removef_command function where it was cut off
+    // continuation of handle_removef_command 
     if (strcmp(ext, ".c") == 0) {
-        // C files are stored locally
+        // c files are stored locally
         char full_path[MAX_BUFF];
-        snprintf(full_path, sizeof(full_path), "/tmp/S1/%s", filepath + 4); // Skip ~S1/
-        
-        // Try to remove the file
-        if (unlink(full_path) == 0) {
+        snprintf(full_path, sizeof(full_path), "~/S1/%s", filepath + 4); // Skip ~S1/
+        char *expanded_full_path = expand_path(full_path);
+
+        // try to remove the file
+        if (unlink(expanded_full_path) == 0) {
             write(client_sock, "OK: File removed\n", 17);
         } else {
             write(client_sock, "ERR: Could not remove file\n", 27);
@@ -463,7 +515,7 @@ void handle_removef_command(int client_sock, char *filepath) {
     }
 }
 
-// Function to get tar file from server
+// function to get tar file from server
 void get_tar_from_server(int server_port, char *filetype, int client_sock) {
     int server_sock = socket(AF_INET, SOCK_STREAM, 0);
     if (server_sock < 0) {
@@ -484,7 +536,7 @@ void get_tar_from_server(int server_port, char *filetype, int client_sock) {
         return;
     }
     
-    // Send get_tar command to the server
+    // send get_tar command to the server
     char command[MAX_BUFF];
     snprintf(command, sizeof(command), "gettar %s", filetype);
     write(server_sock, command, strlen(command));
@@ -513,56 +565,67 @@ void get_tar_from_server(int server_port, char *filetype, int client_sock) {
     close(server_sock);
 }
 
-// Function to handle downltar command
+
+
+// function to handle downltar command
 void handle_downltar_command(int client_sock, char *filetype) {
     // Check valid file types
-    if (strcmp(filetype, "c") == 0) {
-        // Create a temporary directory for creating the tar
-        char temp_dir[MAX_BUFF];
-        snprintf(temp_dir, sizeof(temp_dir), "/tmp/S1_tar_%d", getpid());
-        mkdirp(temp_dir);
-        
-        // Create a tar file of all .c files
+     if (strcmp(filetype, "c") == 0) {
+        // current working directory (pwd)
+        char current_dir[MAX_BUFF];
+        if (getcwd(current_dir, sizeof(current_dir)) == NULL) {
+            write(client_sock, "ERR: Failed to get current directory\n", 37);
+            return;
+        }
+
+        // expand the path to the S1 directory
+        char *expanded_s1_path = expand_path("~/S1");
+
+      
+        char tar_path[MAX_BUFF];
+        snprintf(tar_path, sizeof(tar_path), "%s/c_files_%d.tar", current_dir, getpid());
+
+        // Build the tar command
         char tar_cmd[MAX_BUFF];
         snprintf(tar_cmd, sizeof(tar_cmd), 
-                 "find /tmp/S1 -name '*.c' -exec tar -rf %s/c_files.tar {} \\; 2>/dev/null || true", 
-                 temp_dir);
+                 "find '%s' -name '*.c' -exec tar -cf '%s' {} + 2>/dev/null || true", 
+                 expanded_s1_path, tar_path);
         system(tar_cmd);
-        
-        // Get the size of the tar file
-        char tar_path[MAX_BUFF];
-        snprintf(tar_path, sizeof(tar_path), "%s/c_files.tar", temp_dir);
-        
+
+        // Check if the tar file is valid
         struct stat st;
         if (stat(tar_path, &st) != 0 || st.st_size == 0) {
             write(client_sock, "0\n", 2); // No files or empty tar
-            rmdir(temp_dir);
+            unlink(tar_path); // Clean up empty tar
+            free(expanded_s1_path);
             return;
         }
-        
+
         // Send file size
         char size_header[64];
         snprintf(size_header, sizeof(size_header), "%ld\n", st.st_size);
         write(client_sock, size_header, strlen(size_header));
-        
+
         // Send file content
         int fd = open(tar_path, O_RDONLY);
         if (fd < 0) {
             perror("Cannot open tar file");
+            free(expanded_s1_path);
             return;
         }
-        
+
         char buffer[MAX_BUFF];
         ssize_t bytes_read;
         while ((bytes_read = read(fd, buffer, MAX_BUFF)) > 0) {
             write(client_sock, buffer, bytes_read);
         }
         close(fd);
-        
+
         // Clean up
-        unlink(tar_path);
-        rmdir(temp_dir);
-    } else if (strcmp(filetype, "p") == 0) {
+        unlink(tar_path); // delete the tar file...
+        
+    }
+     else if (strcmp(filetype, "p") == 0) {
         // PDF files are stored on S2
         get_tar_from_server(S2_PORT, filetype, client_sock);
     } else if (strcmp(filetype, "t") == 0) {
@@ -574,7 +637,9 @@ void handle_downltar_command(int client_sock, char *filetype) {
     } else {
         write(client_sock, "ERR: Unsupported file type\n", 27);
     }
-}
+
+ }        
+
 
 // Function to get filenames from a server
 void get_filenames_from_server(int server_port, char *pathname, FileEntry *entries, int *count) {
@@ -636,7 +701,7 @@ int compare_file_entries(const void *a, const void *b) {
 
 // Function to handle dispfnames command
 void handle_dispfnames_command(int client_sock, char *pathname) {
-    // Make sure pathname starts with ~S1/
+    // pathname starts with ~S1/
     if (strncmp(pathname, "~S1/", 4) != 0) {
         write(client_sock, "ERR: Path must start with ~S1/\n", 29);
         return;
@@ -644,14 +709,14 @@ void handle_dispfnames_command(int client_sock, char *pathname) {
     
     // Convert pathname
     char dir_path[MAX_BUFF];
-    snprintf(dir_path, sizeof(dir_path), "/tmp/S1/%s", pathname + 4); // Skip ~S1/
-    
+    snprintf(dir_path, sizeof(dir_path), "~/S1/%s", pathname + 4); // Skip ~S1/
+    char *expanded_dir_path = expand_path(dir_path);
     // Array to hold file entries
     FileEntry entries[1000];
     int count = 0;
     
     // List local C files
-    DIR *dir = opendir(dir_path);
+    DIR *dir = opendir(expanded_dir_path);
     if (dir) {
         struct dirent *entry;
         while ((entry = readdir(dir)) && count < 1000) {
@@ -826,7 +891,7 @@ int main() {
     printf("S1 Server started on port %d\n", PORT);
     
     // Create base directory
-    mkdirp("/tmp/S1");
+    mkdirp("~/S1");
     
     // Main server loop
     while (1) {

@@ -11,11 +11,11 @@
 #include <errno.h>
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
-#define S1_IP "127.0.0.1"  // Use localhost for testing
-#define S1_PORT 8080
+#define S1_IP "127.0.0.1"  //  localhost 
+#define S1_PORT 9080
 #define MAX_BUFF 4096
 
-// Function prototypes
+// functions 
 int validate_command(char *cmd, char *arg1, char *arg2);
 int upload_command_validation(char *filename, char *dest_path);
 int download_command_validation(char *filepath);
@@ -38,7 +38,7 @@ int main(int argc, char const *argv[]) {
     printf("w25client$ ");
     
     while (fgets(command, MAX_BUFF, stdin)) {
-        // Save original command for sending
+        // save original command for sending
         char original_cmd[MAX_BUFF];
         strcpy(original_cmd, command);
         
@@ -127,13 +127,13 @@ int main(int argc, char const *argv[]) {
             receive_filenames(sock);
         }
         
-        // Receive server response for commands that don't have special handling
+        // Receive server response for commands
         if (strcmp(cmd, "removef") == 0) {
             fd_set readfds;
             struct timeval tv;
             FD_ZERO(&readfds);
             FD_SET(sock, &readfds);
-            tv.tv_sec = 5;  // 5 second timeout
+            tv.tv_sec = 5;  // 5 sec timeout
             tv.tv_usec = 0;
             
             if (select(sock + 1, &readfds, NULL, NULL, &tv) > 0) {
@@ -240,7 +240,7 @@ int download_command_validation(char *filepath) {
         printf("Error: Invalid file path format\n");
         return 0;
     }
-    filename++; // Skip the '/'
+    filename++; // Skip  '/'
     
     char *ext = strrchr(filename, '.');
     if (!ext || (strcmp(ext, ".c") != 0 && strcmp(ext, ".pdf") != 0 &&
@@ -265,7 +265,7 @@ int remove_command_validation(char *filepath) {
         printf("Error: Invalid file path format\n");
         return 0;
     }
-    filename++; // Skip the '/'
+    filename++; // Skip  '/'
     
     char *ext = strrchr(filename, '.');
     if (!ext || (strcmp(ext, ".c") != 0 && strcmp(ext, ".pdf") != 0 &&
@@ -344,7 +344,7 @@ void send_file(int sock, char *filename) {
     struct timeval tv;
     FD_ZERO(&readfds);
     FD_SET(sock, &readfds);
-    tv.tv_sec = 10;  // 10 second timeout
+    tv.tv_sec = 30;  // 10 second timeout
     tv.tv_usec = 0;
     
     if (select(sock + 1, &readfds, NULL, NULL, &tv) > 0) {
@@ -533,14 +533,14 @@ void receive_filenames(int sock) {
 void print_help() {
     printf("\nAvailable commands:\n");
     printf("-------------------------------------------\n");
-    printf("uploadf <filename> <destination_path>  - Upload a file to server\n");
-    printf("downlf <filepath>                     - Download a file from server\n");
-    printf("removef <filepath>                    - Remove a file from server\n");
-    printf("downltar <filetype>                   - Download all files of specified type as tar\n");
+    printf("--> uploadf <filename> <destination_path>  - Upload a file to server\n");
+    printf("-->downlf <filepath>                     - Download a file from server\n");
+    printf("-->removef <filepath>                    - Remove a file from server\n");
+    printf("-->downltar <filetype>                   - Download all files of specified type as tar\n");
     printf("                                         where filetype is: c, p, t, or z\n");
-    printf("dispfnames <pathname>                 - Display filenames in specified path\n");
-    printf("help                                  - Show this help message\n");
-    printf("exit/quit                             - Exit the client\n");
+    printf("-->dispfnames <pathname>                 - Display filenames in specified path\n");
+    printf("-->help                                  - Show this help message\n");
+    printf("-->exit/quit                             - Exit the client\n");
     printf("-------------------------------------------\n");
     printf("Note: All paths must start with ~S1/\n");
     printf("Example: uploadf myfile.c ~S1/projects/\n");
@@ -568,7 +568,7 @@ int connect_to_server() {
     
     // Set connection timeout
     struct timeval tv;
-    tv.tv_sec = 3;  // 3 second timeout
+    tv.tv_sec = 3;  // 3 sec timeout
     tv.tv_usec = 0;
     setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof tv);
     setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof tv);
